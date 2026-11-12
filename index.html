@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#050203">
+<title>Reentry: a heart solved live on your GPU</title>
+<meta name="description" content="Not an animation. A human heart simulated cell by cell. Induce VF, then shock it back.">
+<style>
+  :root{--ink:#efe6dc;--dim:#8d7f78;--faint:#4a3f3c;--ecg:#7dffb2;--art:#ff5468;--amber:#ffb45c;--teal:#57d6c9;
+        --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;--mono:ui-monospace,"Cascadia Mono",Consolas,Menlo,monospace}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#050203;color:var(--ink);font-family:var(--serif);overflow:hidden;overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+  button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+  #app{position:fixed;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;grid-template-columns:minmax(0,1fr);
+       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px 0;gap:12px;z-index:3}
+  .mark{font-size:19px;letter-spacing:.01em;font-style:italic}
+  .ico{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--dim);padding:7px 2px;text-transform:uppercase}
+  .ico.on{color:var(--amber)}
+  .right{display:flex;gap:16px}
+  #stage{position:relative;min-height:0;display:flex;align-items:center;justify-content:center}
+  #gl{position:absolute;touch-action:none;display:block;-webkit-mask-image:radial-gradient(closest-side,#000 82%,transparent);mask-image:radial-gradient(closest-side,#000 82%,transparent)}
+  .lbl{position:absolute;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#ffffff40;pointer-events:none;transform:translate(-50%,-50%)}
+  #vitals{position:absolute;left:16px;top:6px;pointer-events:none}
+  #rhythm{font-size:clamp(17px,4.6vw,24px);font-style:italic;line-height:1.1;transition:color .4s}
+  #rhythm.bad{color:#ff6b6b}
+  .num{position:absolute;right:16px;top:6px;text-align:right;font-family:var(--mono);pointer-events:none}
+  .num b{display:block;font-weight:400;font-size:clamp(30px,9vw,44px);line-height:1;color:var(--ecg);font-variant-numeric:tabular-nums}
+  .num i{font-style:normal;display:block;font-size:17px;color:var(--art);margin-top:3px;font-variant-numeric:tabular-nums}
+  .num small{font-size:9px;letter-spacing:.14em;color:var(--dim)}
+  #legend{position:absolute;left:16px;bottom:8px;font-family:var(--mono);font-size:10px;color:var(--dim);line-height:1.7;pointer-events:none}
+  #legend s{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;text-decoration:none;vertical-align:-1px}
+  #mon{display:block;width:100%;height:clamp(150px,27vh,240px);background:linear-gradient(#080506,#060304)}
+  #dock{padding:9px 0 10px;border-top:1px solid #ffffff10;background:#060304}
+  #note{font-size:14.5px;line-height:1.38;color:#cfc3ba;padding:0 16px 9px;min-height:3.9em}
+  #note b{font-weight:400;color:var(--ink);font-style:italic}
+  #cases{display:flex;gap:7px;overflow-x:auto;padding:0 16px;scrollbar-width:none}
+  #cases::-webkit-scrollbar{display:none}
+  .chip{flex:none;font-family:var(--mono);font-size:12px;padding:9px 12px;border:1px solid #ffffff1c;border-radius:3px;color:#d8ccc4;transition:background .2s,color .2s,border-color .2s}
+  .chip.on{background:var(--ink);color:#120808;border-color:var(--ink)}
+  #ctl{display:flex;align-items:center;gap:14px;padding:9px 16px 0;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  #ctl label{display:flex;align-items:center;gap:9px;flex:1;min-width:0}
+  input[type=range]{flex:1;min-width:0;accent-color:#ff6b6b;height:26px;background:none}
+  #shock{position:absolute;left:50%;bottom:14px;transform:translate(-50%,10px);opacity:0;pointer-events:none;background:#ff2e3e;color:#fff;
+         font-family:var(--mono);font-size:15px;letter-spacing:.14em;padding:15px 30px;border-radius:3px;transition:.2s;box-shadow:0 0 44px #ff2e3e80;z-index:4}
+  #shock.on{opacity:1;transform:translate(-50%,0);pointer-events:auto;animation:throb 1s infinite}
+  #shock:disabled{background:#62232a;box-shadow:none;animation:none}
+  @keyframes throb{50%{box-shadow:0 0 70px #ff2e3ec0}}
+  #intro{position:fixed;inset:0;z-index:10;background:#050203;display:flex;flex-direction:column;justify-content:center;padding:32px;transition:opacity 1.3s}
+  #intro.off{opacity:0;pointer-events:none}
+  #intro h1{font-weight:400;font-style:italic;font-size:clamp(46px,14vw,92px);margin:0 0 20px;letter-spacing:-.01em}
+  #intro p{font-size:clamp(17px,4.6vw,22px);line-height:1.45;max-width:29em;color:#c6b8ae;margin:0 0 14px}
+  #begin{align-self:flex-start;margin-top:24px;font-family:var(--mono);font-size:14px;letter-spacing:.1em;padding:15px 24px;border:1px solid var(--ink)}
+  #sheet{position:fixed;inset:0;z-index:9;background:#050203f4;padding:calc(20px + env(safe-area-inset-top)) 24px 32px;overflow-y:auto;display:none;font-size:16px;line-height:1.5;color:#cdc0b6;user-select:text;-webkit-user-select:text}
+  #sheet.on{display:block}
+  #sheet div{max-width:34em;margin:0 auto}
+  #sheet h2{font-weight:400;font-style:italic;font-size:27px;color:var(--ink);margin:0 0 12px}
+  #sheet h3{font-family:var(--mono);font-weight:400;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin:26px 0 6px}
+  #sheet ul{padding-left:18px;margin:6px 0}#sheet li{margin:5px 0}
+  #nogl{position:fixed;inset:0;z-index:20;display:none;background:#050203;padding:32px;font-size:18px;line-height:1.5}
+  @media (min-aspect-ratio:11/10){
+    #app{grid-template-columns:minmax(0,1.1fr) minmax(360px,1fr);grid-template-rows:auto minmax(0,1fr) auto}
+    header{grid-column:1/3}
+    #stage{grid-row:2/4}
+    #mon{grid-column:2;grid-row:2;height:100%}
+    #dock{grid-column:2;grid-row:3;border-left:1px solid #ffffff10}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="mark">Reentry</div>
+    <div class="right">
+      <button class="ico" id="slow" aria-pressed="false">Slow</button>
+      <button class="ico on" id="snd" aria-pressed="true">Sound</button>
+      <button class="ico" id="how">About</button>
+    </div>
+  </header>
+  <main id="stage">
+    <canvas id="gl" aria-label="Live simulation of the electrical activity of a four-chamber heart. Tap to fire a premature beat."></canvas>
+    <div id="vitals"><div id="rhythm">Sinus rhythm</div></div>
+    <div class="num"><small>HR</small><b id="hr">--</b><i id="bp">---/--</i><small>ART MODEL</small></div>
+    <div id="legend"><div><s style="background:#fff0cf"></s>wavefront</div><div><s style="background:#b32433"></s>plateau</div><div><s style="background:#3fb5ad"></s>refractory</div></div>
+    <button id="shock">SHOCK</button>
+  </main>
+  <canvas id="mon"></canvas>
+  <section id="dock">
+    <div id="note" aria-live="polite"></div>
+    <nav id="cases"></nav>
+    <div id="ctl">
+      <label>Ischaemia <input id="isch" type="range" min="0" max="100" value="0" aria-label="Ischaemia"></label>
+      <button class="ico" id="scar">Scar brush</button>
+    </div>
+  </section>
+</div>
+
+<div id="intro">
+  <h1>Reentry</h1>
+  <p>This heart is not an animation. Each frame, your graphics chip solves the voltage of 25,000 patches of muscle.</p>
+  <p>The ECG is not drawn either. It is what an electrode would read off that voltage.</p>
+  <p>So it can be broken. Try.</p>
+  <button id="begin">Start the heart</button>
+</div>
+
+<div id="sheet"><div>
+  <h2>What is real here</h2>
+  <p>A 2D four-chamber slice runs the Aliev–Panfilov equations, a two-variable reduced model of cardiac action potentials, on a 256 × 256 grid. Waves, block, re-entry and fibrillation all emerge from those equations. None of them is scripted.</p>
+  <h3>Computed, not drawn</h3>
+  <ul>
+    <li>The ECG. Each lead is a pseudo-ECG integrated from the voltage gradients, using Wilson's central terminal for the V leads. P, QRS and T come out of that sum.</li>
+    <li>The T wave, which is upright because the epicardium repolarises before the endocardium.</li>
+    <li>The irregularly irregular pulse of AF, which is the AV node filtering chaos.</li>
+    <li>Loss of pulse in VF. The muscle is still electrically busy, but it no longer contracts together.</li>
+  </ul>
+  <h3>Simplified, on purpose</h3>
+  <ul>
+    <li>A flat slice is not a heart. Real VF lives in 3D.</li>
+    <li>The cardiac wavelength is shrunk under ischaemia more than real tissue would, so re-entry fits a 2D slice. The direction is correct, the size is exaggerated.</li>
+    <li>Conduction velocity is slower than the real value relative to heart size, so the QRS is on the wide side of normal.</li>
+    <li>The AV node and Purkinje network are timed rules, not tissue. In AF, the node's concealed conduction includes some randomness.</li>
+    <li>AF here has few wavelets: a slice this small cannot hold real AF, which runs near 400 cycles a minute. Treat it as the mechanism, not the rate.</li>
+    <li>Shock always succeeds. Real defibrillation can fail, and the outcome depends on energy and on the substrate.</li>
+    <li>Blood pressure is an illustrative Windkessel estimate, calibrated to read near 120/80. It is not a haemodynamic model.</li>
+  </ul>
+  <p>Built for learning. Not a clinical tool.</p>
+  <button class="ico" id="close" style="margin-top:14px;color:var(--ink)">Back to the heart</button>
+</div></div>
+<div id="nogl">This needs WebGL2 with float textures, which this browser does not have. Try a recent Chrome or Safari.</div>
+
+<script>
+'use strict';
+addEventListener('error',e=>{const n=document.getElementById('nogl');n.style.display='block';n.textContent='Startup failed: '+e.message+' (line '+e.lineno+')';});
+/* ------------------------------------------------------------------ *
+ *  1. CONSTANTS
+ *  WHY dimensionless: Aliev-Panfilov runs in model units. 1 tu = 12.9 ms
+ *  is the published mapping that gives a ventricular APD near 300 ms.
+ * ------------------------------------------------------------------ */
+const Q = new URLSearchParams(location.search);
+const N = 256, W = 96;              // simulation grid, coarse grid for ECG/sensing
+const TU = 12.9;                    // ms per model time unit
+const DT = 0.03;                    // tu per step. Stability needs D*DT < ~0.2
+const STEP_MS = DT * TU;
+const CHUNK_STEPS = 8;              // steps between stimulus checks
+const CHUNK_MS = CHUNK_STEPS * STEP_MS;
+const P = {                         // tunable physiology
+  Dv: 5.6, Da: 4.2,                 // diffusion, ventricle / atrium
+  EvBase: .5, EaBase: 1.9,         // repolarisation speed multipliers
+  hr: 72,
+  avDelay: 62, avERP: 270, avTauRec: 300, avDecrement: 0,
+  avBlock: false,
+  hvDelay: 26, purkMsPerCell: 0.17,
+  escapeMs: 1350, avConceal: 0, iD:.82, iE:.6, iH:.5, afD:.3, afE:.7, afH:1.4,
+  limbGain: .11, chestGain: .0046, artGain: 72, atrialWall: .3
+};
+const canvas = document.getElementById('gl');
+
+/* ------------------------------------------------------------------ *
+ *  2. WEBGL SETUP
+ * ------------------------------------------------------------------ */
+const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, powerPreference:'high-performance', preserveDrawingBuffer:Q.has('test')});
+const extF = gl && gl.getExtension('EXT_color_buffer_float');
+const extH = gl && gl.getExtension('EXT_color_buffer_half_float');
+if (!gl || !(extF || extH)) { document.getElementById('nogl').style.display = 'block'; throw new Error('no float RT'); }
+gl.getExtension('OES_texture_float_linear');
+
+function floatFormat(){
+  // WHY probe: phones advertise formats they cannot actually render to.
+  const tryFmt = (ifmt, type) => {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, 4, 4, 0, gl.RGBA, type, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(f); gl.deleteTexture(t);
+    return ok;
+  };
+  if (!Q.has('hf') && extF && tryFmt(gl.RGBA32F, gl.FLOAT)) return {i:gl.RGBA32F, t:gl.FLOAT, name:'32F'};
+  if (tryFmt(gl.RGBA16F, gl.HALF_FLOAT)) return {i:gl.RGBA16F, t:gl.HALF_FLOAT, name:'16F'};
+  document.getElementById('nogl').style.display = 'block'; throw new Error('no float RT');
+}
+const FF = floatFormat();
+
+const VS = `#version 300 es
+out vec2 p; void main(){ vec2 v=vec2((gl_VertexID<<1)&2,gl_VertexID&2); p=v; gl_Position=vec4(v*2.-1.,0,1);}`;
+function prog(fs){
+  const mk = (ty,src) => { const s=gl.createShader(ty); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const p = gl.createProgram();
+  gl.attachShader(p,mk(gl.VERTEX_SHADER,VS)); gl.attachShader(p,mk(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; const n = gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(let i=0;i<n;i++){ const a=gl.getActiveUniform(p,i); const nm=a.name.replace('[0]',''); u[nm]=gl.getUniformLocation(p,a.name); }
+  return {p,u};
+}
+const HDR = `#version 300 es
+precision highp float; precision highp sampler2D; in vec2 p; out vec4 o;`;
+
+/* The physics. Aliev-Panfilov 1996:
+     du/dt = div(D grad u) - k u (u-a)(u-1) - u v
+     dv/dt = eps(u,v) ( -v - k u (u-a-1) )
+   u = membrane voltage (0 rest, 1 peak), v = recovery.
+   WHY 9-point Laplacian: a 5-point one makes round waves go diamond shaped.
+   WHY mirror at void: walls are insulated (no-flux boundary). */
+const SIM = prog(HDR+`
+uniform sampler2D S,M; uniform float dt,Dv,Da,Ev,Ea,het,hetA;
+ivec2 c; float u0;
+float nb(int x,int y){ ivec2 q=c+ivec2(x,y); return texelFetch(M,q,0).r>.5?texelFetch(S,q,0).r:u0; }
+void main(){
+  c=ivec2(gl_FragCoord.xy);
+  vec4 m=texelFetch(M,c,0);
+  if(m.r<.5){o=vec4(0.);return;}
+  vec4 s=texelFetch(S,c,0); float u=s.r,v=s.g; u0=u;
+  float lap=(4.*(nb(1,0)+nb(-1,0)+nb(0,1)+nb(0,-1))+nb(1,1)+nb(-1,1)+nb(1,-1)+nb(-1,-1)-20.*u)/6.;
+  bool atr=m.a<.5;
+  float h=m.g*2.-1.;              // this cell's offset in the patchy recovery map
+  float D=atr?Da:Dv;
+  float E=(atr?Ea:Ev)*m.b*5.*exp((atr?hetA:het)*h);
+  const float k=8.,a=.13,e0=.002,m1=.2,m2=.3;
+  float eps=(e0+m1*v/(u+m2))*E;
+  float du=D*lap-k*u*(u-a)*(u-1.)-u*v;
+  float dv=eps*(-v-k*u*(u-a-1.));
+  o=vec4(clamp(u+dt*du,0.,1.2),max(v+dt*dv,0.),0.,1.);
+}`);
+const STIM = prog(HDR+`
+uniform sampler2D S,M; uniform vec3 P[32]; uniform int n;
+void main(){ ivec2 c=ivec2(gl_FragCoord.xy); vec4 s=texelFetch(S,c,0);
+  if(texelFetch(M,c,0).r>.5) for(int i=0;i<n;i++){ vec2 d=vec2(c)+.5-P[i].xy; if(dot(d,d)<P[i].z*P[i].z) s.r=max(s.r,.75); }
+  o=s; }`);
+const SHOCK = prog(HDR+`
+uniform sampler2D S,M;
+void main(){ ivec2 c=ivec2(gl_FragCoord.xy); vec4 s=texelFetch(S,c,0);
+  // WHY v=0: a successful shock depolarises every cell into the same phase, which erases the wave pattern.
+  if(texelFetch(M,c,0).r>.5) s=vec4(1.,0.,0.,1.); o=s; }`);
+/* Shrinks the field to W x W so the CPU can read it cheaply. */
+const COARSE = prog(HDR+`
+uniform sampler2D S,M;
+void main(){ vec2 f=(gl_FragCoord.xy)/${W}.*${N}.; ivec2 c=ivec2(f); float su=0.,sv=0.,n=0.;
+  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){ ivec2 q=c+ivec2(x,y); if(texelFetch(M,q,0).r>.5){vec4 s=texelFetch(S,q,0);su+=s.r;sv+=s.g;n+=1.;} }
+  o=n>0.?vec4(su/n,sv/n,n/9.,1.):vec4(0.); }`);
+const VIEW = prog(HDR+`
+uniform sampler2D S;
+void main(){ vec4 s=texelFetch(S,ivec2(gl_FragCoord.xy),0); o=vec4(s.r,clamp(s.g*.42,0.,1.),0.,1.); }`);
+const BIC=`vec4 bic(sampler2D s,vec2 uv){ // WHY: B-spline upscaling hides the 256 grid on a phone screen
+  float T=${N}.; vec2 st=uv*T-.5,i=floor(st),f=st-i,f2=f*f,f3=f2*f;
+  vec2 w0=(1.-f)*(1.-f)*(1.-f)/6.,w1=(4.-6.*f2+3.*f3)/6.,w2=(1.+3.*f+3.*f2-3.*f3)/6.,w3=f3/6.;
+  vec2 g0=w0+w1,g1=w2+w3,h0=(i-1.+w1/g0+.5)/T,h1=(i+1.+w3/g1+.5)/T;
+  return g0.y*(g0.x*texture(s,vec2(h0.x,h0.y))+g1.x*texture(s,vec2(h1.x,h0.y)))+g1.y*(g0.x*texture(s,vec2(h0.x,h1.y))+g1.x*texture(s,vec2(h1.x,h1.y)));
+}`;
+/* Muscle never changes, so it is painted once into a texture. WHY: recomputing fractal
+   noise for every pixel every frame was the most expensive thing on screen. */
+const BAKE = prog(HDR+BIC+`
+uniform sampler2D A;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float a=.5,s=0.;for(int i=0;i<4;i++){s+=a*noise(p);p=p*2.03+7.;a*=.5;}return s;}
+#define T(c) vec2((c).x,1.-(c).y)
+void main(){
+  vec2 q=vec2(p.x,1.-p.y),qt=T(q),ax=normalize(vec2(.37,.93)),fd=vec2(-ax.y,ax.x);
+  vec4 a=.5*bic(A,qt)+.5*textureLod(A,qt,1.15);
+  float hx=textureLod(A,T(q+vec2(.012,0)),2.4).r-textureLod(A,T(q-vec2(.012,0)),2.4).r;
+  float hy=textureLod(A,T(q+vec2(0,.012)),2.4).r-textureLod(A,T(q-vec2(0,.012)),2.4).r;
+  vec3 n=normalize(vec3(-hx*1.5,-hy*1.5,.34));
+  float lit=max(dot(n,normalize(vec3(-.5,-.62,.6))),0.),rim=pow(1.-n.z,2.);
+  float fib=fbm(vec2(dot(q,fd)*62.,dot(q,ax)*7.)+fbm(q*5.)*3.);
+  vec3 col=vec3(.018,.009,.011)*(1.-.55*length(q-.5));
+  col=mix(col,vec3(.075,.028,.040)*(.55+.9*lit)+.02*fbm(q*40.),smoothstep(.34,.6,a.b));
+  col=mix(col,vec3(.026,.004,.008)+vec3(.05,.004,.01)*fbm(q*16.),smoothstep(.34,.6,a.g));
+  vec3 mus=mix(vec3(.070,.018,.024),vec3(.115,.033,.036),smoothstep(.3,.7,fib))*(.30+1.3*lit)+vec3(.10,.035,.03)*rim;
+  float cover=smoothstep(.36,.60,a.r);
+  col=mix(col,mus,cover);
+  col=mix(col,vec3(.17,.155,.145)*(.5+.8*fbm(q*60.)),smoothstep(.4,.6,a.a));
+  o=vec4(sqrt(clamp(col,0.,1.)),cover);
+}`);
+const DISPLAY = prog(HDR+BIC+`
+uniform sampler2D V,B,R; uniform float t,uF,uFA,uPT,uFlash,uAlarm;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+void main(){
+  vec2 uv=vec2(p.x,1.-p.y);
+  // Excitation-contraction coupling: geometry moves with computed muscle activation.
+  vec2 cv=vec2(.44,.44),ax=normalize(vec2(.37,.93));
+  float al=dot(uv-cv,ax);
+  float wv=smoothstep(-.02,.14,al),wa=smoothstep(.02,-.14,al);
+  vec2 q=cv+(uv-cv)*(1.+.10*uF*wv+.07*uFA*wa);
+  q+=vec2(-ax.y,ax.x)*al*.06*uF*wv;
+  vec2 qt=vec2(q.x,1.-q.y);
+  vec4 base=texture(B,qt); vec4 v=bic(V,qt); vec4 r=texture(R,qt);
+  vec3 col=base.rgb*base.rgb;
+  float u=v.r,w=v.g/.42;
+  float plateau=smoothstep(.12,.8,u);
+  float front=smoothstep(.2,.8,u)*exp(-w*5.);
+  float ref=smoothstep(.34,.02,u)*smoothstep(.1,.7,w);
+  vec3 mus=col;
+  mus=mix(mus,mus*vec3(.9,.45,.45)+vec3(.43,.035,.075),plateau);
+  mus+=vec3(.05,.34,.34)*ref*.8;
+  mus+=vec3(1.5,1.04,.68)*front;
+  col=mix(col,mus,base.a);
+  // Conduction system: a travelling pulse along the Purkinje tree
+  float pulse=exp(-pow((r.g-uPT)*14.,2.))*step(0.,uPT);
+  col+=r.r*(vec3(.042,.034,.027)+vec3(1.1,.85,.5)*pulse);
+  col+=vec3(.9,.6,.3)*r.b;
+  // Bloom from mip levels of the voltage field
+  float g=textureLod(V,qt,3.2).r*.75+textureLod(V,qt,4.6).r*.9;
+  col+=vec3(.42,.07,.09)*g*g*.8;
+  col=mix(col,col*vec3(1.2,.5,.5)+vec3(.05,0,0),uAlarm*.6);
+  col+=vec3(.85,.92,1.)*uFlash;
+  col*=1.-.4*pow(length(uv-.5)*1.25,3.);
+  col=col/(1.+col*.4);                   // soft tone map
+  col=pow(col,vec3(.4545));
+  col+=(hash(gl_FragCoord.xy+t)-.5)/255.; // dither away banding
+  o=vec4(col,1.);
+}`);
+
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+function tex(w,h,ifmt,fmt,type,data,filter){
+  const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texImage2D(gl.TEXTURE_2D,0,ifmt,w,h,0,fmt,type,data||null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,filter||gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,filter===gl.NEAREST||!filter?gl.NEAREST:gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return t;
+}
+function fbo(t){ const f=gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,t,0); return f; }
+const bind=(unit,t,loc)=>{gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t);gl.uniform1i(loc,unit);};
+const quad=()=>gl.drawArrays(gl.TRIANGLES,0,3);
+
+/* ------------------------------------------------------------------ *
+ *  3. ANATOMY
+ *  Painted with canvas paths into a region map. Viewed from the front,
+ *  so patient-left is screen-right and the apex points down-right.
+ * ------------------------------------------------------------------ */
+const R_VOID=0,R_CAV=1,R_ATR=2,R_VEN=3,R_VES=4,R_SCAR=5;
+const region=new Uint8Array(N*N), dEndo=new Int16Array(N*N), dEpi=new Int16Array(N*N);
+const ROT=-20*Math.PI/180, ORG=[.43,.445], SCL=.86;
+function toGrid(x,y){ // local heart coords -> grid cells (grid y=0 at top of image here)
+  const c=Math.cos(ROT),s=Math.sin(ROT);
+  return [(ORG[0]+SCL*(x*c-y*s))*N,(ORG[1]+SCL*(x*s+y*c))*N];
+}
+function paintAnatomy(g){
+  const S=N*SCL; g.setTransform(1,0,0,1,0,0); g.fillStyle='#000'; g.fillRect(0,0,N,N);
+  g.setTransform(S*Math.cos(ROT),S*Math.sin(ROT),-S*Math.sin(ROT),S*Math.cos(ROT),ORG[0]*N,ORG[1]*N);
+  const path=f=>{g.beginPath();f();g.fill();};
+  const ell=(x,y,a,b,r=0)=>path(()=>g.ellipse(x,y,a,b,r,0,7));
+  // great vessels (not excitable, only for context)
+  g.strokeStyle='#00f'; g.lineCap='round';
+  const tube=(w,f)=>{g.lineWidth=w;g.beginPath();f();g.stroke();};
+  tube(.095,()=>{g.moveTo(.015,-.17);g.bezierCurveTo(.03,-.32,.06,-.42,.2,-.42);g.lineTo(.33,-.40);});   // aorta
+  tube(.085,()=>{g.moveTo(-.235,-.2);g.lineTo(-.22,-.41);});                                             // SVC
+  tube(.07,()=>{g.moveTo(.13,-.26);g.lineTo(.36,-.30);});                                               // pulm veins
+  // atria
+  g.fillStyle='#0f0';
+  ell(-.2,-.155,.185,.155,.1); ell(.145,-.17,.165,.135,-.15);
+  path(()=>{g.rect(-.09,-.2,.15,.165);});
+  g.fillStyle='#ff0';
+  ell(-.205,-.155,.082,.068,.1); ell(.155,-.175,.07,.058,-.15);
+  // fibrous skeleton: an insulating plane, the reason the AV node is the only way through
+  g.fillStyle='#000';
+  g.fillRect(-.5,-.02,1,.5);
+  // ventricles
+  g.fillStyle='#f00';
+  path(()=>{g.moveTo(-.345,.012);g.bezierCurveTo(-.43,.24,-.235,.5,.07,.60);g.bezierCurveTo(.27,.53,.40,.27,.335,.012);g.closePath();});
+  g.fillStyle='#ff0';
+  ell(.135,.205,.058,.165,-.13);                                                                         // LV
+  path(()=>{g.moveTo(-.235,.012);g.bezierCurveTo(-.30,.15,-.20,.31,-.055,.385);g.bezierCurveTo(-.095,.24,-.095,.11,-.075,.012);g.closePath();}); // RV
+  path(()=>{g.rect(.095,.012,.08,.06);});                                                                // mitral inflow
+}
+function buildRegions(){
+  const c=document.createElement('canvas'); c.width=c.height=N;
+  const g=c.getContext('2d',{willReadFrequently:true}); paintAnatomy(g);
+  const d=g.getImageData(0,0,N,N).data;
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const i=(x+y*N)*4,r=d[i],gg=d[i+1],b=d[i+2];
+    const k=x+y*N;
+    region[k]= (r>127&&gg>127)?R_CAV : r>127?R_VEN : gg>127?R_ATR : b>127?R_VES : R_VOID;
+    if(x<3||y<3||x>N-4||y>N-4) region[k]=R_VOID;
+  }
+  // Distance from each wall surface, by breadth-first flood.
+  const bfs=(dist,seed)=>{ dist.fill(-1); let q=[];
+    for(let k=0;k<N*N;k++) if(muscle(k)&&seed(k)){dist[k]=1;q.push(k);}
+    while(q.length){ const nq=[]; for(const k of q) for(const n of [k+1,k-1,k+N,k-N]) if(muscle(n)&&dist[n]<0){dist[n]=dist[k]+1;nq.push(n);} q=nq; } };
+  const muscle=k=>region[k]===R_ATR||region[k]===R_VEN;
+  const touches=(k,r)=>[k+1,k-1,k+N,k-N].some(n=>region[n]===r);
+  bfs(dEndo,k=>touches(k,R_CAV)); bfs(dEpi,k=>touches(k,R_VOID)||touches(k,R_VES));
+}
+const mask=new Uint8Array(N*N*4), anat=new Uint8Array(N*N*4);
+// Patchy recovery map. Ischaemia is never uniform, and that patchiness is what breaks one wave into many.
+function patch(x,y){ const c=13, f=(a,b)=>{const v=Math.sin(a*127.1+b*311.7)*43758.5453;return (v-Math.floor(v))*2-1;}, sm=t=>t*t*(3-2*t);
+  const ix=Math.floor(x/c),iy=Math.floor(y/c),u=sm(x/c-ix),v=sm(y/c-iy);
+  return Math.max(-1,Math.min(1,1.5*((f(ix,iy)*(1-u)+f(ix+1,iy)*u)*(1-v)+(f(ix,iy+1)*(1-u)+f(ix+1,iy+1)*u)*v))); }
+let maskTex, anatTex;
+function buildMask(){
+  const c=Math.cos(-ROT),s=Math.sin(-ROT);
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const k=x+y*N, j=x+(N-1-y)*N;                 // WHY flip: GL's y axis points up
+    const r=region[k], tissue=r===R_ATR||r===R_VEN;
+    let e=1;
+    if(r===R_VEN){
+      // Repolarisation map. Epicardium and apex finish first: that is why the T wave is upright.
+      const de=dEndo[k]>0?dEndo[k]:99, dp=dEpi[k]>0?dEpi[k]:1;
+      const tm=de/(de+dp);
+      const lx=(x/N-ORG[0])/SCL, ly=(y/N-ORG[1])/SCL;
+      const along=Math.max(0,Math.min(1,(lx*s+ly*c)/.6));
+      e=1+P.tEpi*tm+P.tApex*along;
+    }
+    const o=j*4;
+    mask[o]=tissue?255:0; mask[o+1]=Math.round((patch(x,y)*.5+.5)*255); mask[o+2]=Math.min(255,Math.round(e/5*255)); mask[o+3]=r===R_ATR?60:r===R_VEN?200:0;
+    anat[o]=tissue?255:0; anat[o+1]=r===R_CAV?255:0; anat[o+2]=r===R_VES?255:0; anat[o+3]=r===R_SCAR?255:0;
+  }
+}
+P.tEpi=1.2; P.tApex=.8;
+
+/* ------------------------------------------------------------------ *
+ *  4. CONDUCTION SYSTEM
+ *  WHY rules instead of tissue: AV node and Purkinje conduct 100x faster or
+ *  slower than muscle. Simulating that as tissue would need a far smaller
+ *  time step, which phones cannot afford. So they are an event graph that
+ *  listens to the tissue and stimulates it.
+ * ------------------------------------------------------------------ */
+let SA=toGrid(-.255,-.285), AVN=toGrid(-.025,-.06), SEPT=toGrid(.015,.14);
+let atrialSites=[],AV_IN=[],AF_IN=[];
+function snap(pt,r){ // nearest cell of region r
+  let b=null,bd=1e9; for(let k=0;k<N*N;k++) if(region[k]===r&&dEndo[k]>2){const x=k%N,y=k/N|0,dd=(x-pt[0])**2+(y-pt[1])**2; if(dd<bd){bd=dd;b=[x,y];}} return b; }
+function buildAtrial(){
+  // Internodal tracts and Bachmann's bundle: fast routes that make the P wave 100 ms long, not 400.
+  SA=snap(SA,R_ATR); AVN=snap(AVN,R_ATR); AV_IN=[AVN];
+  // In AF the node is bombarded from around the atria, so sample inputs across the atrial wall.
+  for(let k=0;k<N*N;k++) if(region[k]===R_ATR&&dEndo[k]>3&&dEpi[k]>3){const x=k%N,y=k/N|0; if(AF_IN.every(p=>(p[0]-x)**2+(p[1]-y)**2>900))AF_IN.push([x,y]);}
+  const pts=[[-.34,-.2,14],[-.33,-.08,26],[-.2,-.28,14],[-.12,-.13,22],[-.2,-.03,34],[-.03,-.21,26],[-.03,-.075,36],[.1,-.28,40],[.25,-.25,54],[.29,-.13,66],[.17,-.07,58],[.04,-.13,46]];
+  atrialSites=pts.map(p=>{const q=snap(toGrid(p[0],p[1]),R_ATR);return {x:q[0],y:N-1-q[1],delay:p[2]};});
+}
+let junctions=[];    // {x,y,delay}
+let treeTex;
+function buildPurkinje(){
+  // Walk the inner wall of each ventricle from mid-septum, as the bundle branches do.
+  const dist=new Float32Array(N*N).fill(1e9), par=new Int32Array(N*N).fill(-1);
+  const endo=k=>region[k]===R_VEN&&dEndo[k]>0&&dEndo[k]<=2;
+  const nearest=(px,py,side)=>{let b=-1,bd=1e9;for(let k=0;k<N*N;k++)if(endo(k)){const x=k%N,y=k/N|0,dd=(x-px)**2+(y-py)**2;
+    const cx=(x-SEPT[0])*Math.cos(ROT)+(y-SEPT[1])*Math.sin(ROT); if((side>0)===(cx>0)&&dd<bd){bd=dd;b=k;}}return b;};
+  const seeds=[[nearest(SEPT[0],SEPT[1],1),0],[nearest(SEPT[0],SEPT[1],-1),6]]; // LBB a touch early: left-to-right septal q wave
+  let q=seeds.filter(s=>s[0]>=0).map(s=>{dist[s[0]]=s[1];return s[0];});
+  while(q.length){ const nq=new Set(); for(const k of q) for(const n of [k+1,k-1,k+N,k-N,k+N+1,k-N-1,k+N-1,k-N+1]){
+      const c=(Math.abs(n-k)===1||Math.abs(n-k)===N)?1:1.414;
+      if(endo(n)&&dist[n]>dist[k]+c*P.purkMsPerCell+1e-6){dist[n]=dist[k]+c*P.purkMsPerCell;par[n]=k;nq.add(n);} } q=[...nq]; }
+  // Pick junctions spaced apart along the walls.
+  junctions=[]; const taken=[];
+  const order=[]; for(let k=0;k<N*N;k++) if(dist[k]<1e8) order.push(k);
+  order.sort((a,b)=>dist[a]-dist[b]);
+  for(const k of order){ const x=k%N,y=k/N|0;
+    if(taken.every(t=>(t[0]-x)**2+(t[1]-y)**2>64)){taken.push([x,y]);junctions.push({x,y:N-1-y,delay:dist[k]});} }
+  // Purkinje fibres also dive into the wall, so add a mid-wall layer a few ms later.
+  const base=junctions.slice();
+  for(const [depth,lag] of [[8,4],[15,8]]){
+    const kept=[]; for(let k=0;k<N*N;k++){ if(region[k]!==R_VEN||dEndo[k]!==depth) continue;
+      const x=k%N,y=k/N|0; if(!kept.every(t=>(t[0]-x)**2+(t[1]-y)**2>81)) continue; kept.push([x,y]);
+      let best=1e9,d0=0; for(const j of base){const dd=(j.x-x)**2+((N-1-j.y)-y)**2; if(dd<best){best=dd;d0=j.delay;}}
+      junctions.push({x,y:N-1-y,delay:d0+lag}); } }
+  // Render the tree into a texture so it can glow when it fires.
+  const c=document.createElement('canvas'); c.width=c.height=512; const g=c.getContext('2d');
+  g.fillStyle='#000';g.fillRect(0,0,512,512);
+  const maxD=Math.max(...junctions.map(j=>j.delay),1); P.purkMax=maxD;
+  g.globalCompositeOperation='lighter'; g.lineWidth=1.2; g.lineCap='round';
+  for(const k of order){ const p=par[k]; if(p<0) continue;
+    const v=Math.round(dist[k]/maxD*255); g.strokeStyle=`rgb(255,${v},0)`;
+    g.beginPath(); g.moveTo((p%N)*2,(p/N|0)*2); g.lineTo((k%N)*2,(k/N|0)*2); g.stroke(); }
+  g.globalCompositeOperation='source-over';
+  const mark=(pt,r)=>{const gr=g.createRadialGradient(pt[0]*2,pt[1]*2,0,pt[0]*2,pt[1]*2,r);gr.addColorStop(0,'#ff00ff');gr.addColorStop(1,'#ff000000');g.fillStyle=gr;g.beginPath();g.arc(pt[0]*2,pt[1]*2,r,0,7);g.fill();};
+  mark(SA,10); mark(AVN,8);
+  g.strokeStyle='rgb(255,0,0)'; g.lineWidth=1.6; g.beginPath(); g.moveTo(AVN[0]*2,AVN[1]*2); g.lineTo(SEPT[0]*2,SEPT[1]*2); g.stroke();
+  gl.activeTexture(gl.TEXTURE0); treeTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,treeTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+}
+
+/* ------------------------------------------------------------------ *
+ *  5. THE COMPUTED ECG
+ *  phi(r0) = sum over tissue of grad(V) . (r - r0) / |r - r0|^3
+ *  This is the standard pseudo-ECG. A wave heading toward an electrode
+ *  reads positive. Nothing here knows what a QRS is.
+ * ------------------------------------------------------------------ */
+const ELEC={ RA:[-1.5,-1.1,.4], LA:[2.5,-1.1,.4], LL:[1.0,3.6,.4],     // limbs are far from the heart
+             V1:[.30,.42,.34], V3:[.62,.82,.42], V5:[.92,.74,.2] };   // chest leads are close
+const EK=Object.keys(ELEC);
+let edgeI, edgeJ, edgeW;
+function buildEdges(){
+  const tissue=(x,y)=>{ // coarse cell has tissue?
+    const cx=Math.round((x+.5)/W*N), cy=Math.round((y+.5)/W*N);
+    if(cx<1||cy<1||cx>=N-1||cy>=N-1)return false; return mask[(cx+cy*N)*4]>127; };
+  const I=[],J=[],WS=EK.map(()=>[]);
+  for(let y=0;y<W;y++)for(let x=0;x<W;x++){ if(!tissue(x,y))continue;
+    for(const [dx,dy] of [[1,0],[0,1]]){ const X=x+dx,Y=y+dy; if(X>=W||Y>=W||!tissue(X,Y))continue;
+      I.push(x+y*W);J.push(X+Y*W);
+      const fx=(x+dx/2+.5)/W, fy=1-(y+dy/2+.5)/W;       // face centre, in image coords (y down)
+      EK.forEach((e,n)=>{const [ex,ey,ez]=ELEC[e]; const rx=fx-ex,ry=fy-ey,rz=-ez; const r3=Math.pow(rx*rx+ry*ry+rz*rz,1.5);
+        // gradient in image coords: dy in grid goes up, so flip its sign
+        const atr=region[Math.round(fx*N)+Math.round(fy*N)*N]===R_ATR;
+        WS[n].push((dx*rx-dy*ry)/r3*(atr?P.atrialWall:1));});
+    } }
+  edgeI=new Int32Array(I);edgeJ=new Int32Array(J);edgeW=WS.map(a=>new Float32Array(a));
+}
+const coarseBuf=new Float32Array(W*W*4), phi=new Float32Array(EK.length);
+function electrodes(){
+  const c=coarseBuf,n=edgeI.length;
+  for(let e=0;e<EK.length;e++){ let s=0;const w=edgeW[e];
+    for(let i=0;i<n;i++) s+=(c[edgeJ[i]*4]-c[edgeI[i]*4])*w[i];
+    phi[e]=s; }
+  const [ra,la,ll,v1,v3,v5]=phi, wct=(ra+la+ll)/3;
+  const L=P.limbGain,C=P.chestGain;
+  return {I:(la-ra)*L,II:(ll-ra)*L,III:(ll-la)*L,aVF:(ll-(ra+la)/2)*L,V1:(v1-wct)*C,V3:(v3-wct)*C,V5:(v5-wct)*C};
+}
+
+/* ------------------------------------------------------------------ *
+ *  6. STATE AND SOLVER
+ * ------------------------------------------------------------------ */
+let A,B,fA,fB,cTex,cFbo,vTex,vFbo,bakeTex,bakeFbo;const BK=900;
+const Sub={het:0,hetA:0,Ev:P.EvBase,Ea:P.EaBase,Dv:P.Dv,Da:P.Da,isch:0};
+function setSubstrate(i,af){
+  Sub.isch=i;
+  Sub.Dv=P.Dv*(1-P.iD*i); Sub.Ev=P.EvBase*(1+P.iE*i); Sub.het=P.iH*i;
+  Sub.Da=P.Da*(af?P.afD:1); Sub.Ea=P.EaBase*(af?P.afE:1); Sub.hetA=af?P.afH:0;
+}
+function initGL(){
+  A=tex(N,N,FF.i,gl.RGBA,FF.t);B=tex(N,N,FF.i,gl.RGBA,FF.t);fA=fbo(A);fB=fbo(B);
+  cTex=tex(W,W,FF.i,gl.RGBA,FF.t);cFbo=fbo(cTex);
+  vTex=tex(N,N,gl.RGBA8,gl.RGBA,gl.UNSIGNED_BYTE,null,gl.LINEAR_MIPMAP_LINEAR);vFbo=fbo(vTex);
+  maskTex=tex(N,N,gl.RGBA8,gl.RGBA,gl.UNSIGNED_BYTE,mask);
+  anatTex=tex(N,N,gl.RGBA8,gl.RGBA,gl.UNSIGNED_BYTE,anat,gl.LINEAR_MIPMAP_LINEAR);
+  gl.bindTexture(gl.TEXTURE_2D,anatTex);gl.generateMipmap(gl.TEXTURE_2D);
+  bakeTex=tex(BK,BK,gl.RGBA8,gl.RGBA,gl.UNSIGNED_BYTE,null,gl.LINEAR);bakeFbo=fbo(bakeTex);bake();
+  clearState();
+}
+function bake(){ gl.useProgram(BAKE.p);gl.viewport(0,0,BK,BK);bind(0,anatTex,BAKE.u.A);gl.bindFramebuffer(gl.FRAMEBUFFER,bakeFbo);quad(); }
+function clearState(){ for(const f of [fA,fB]){gl.bindFramebuffer(gl.FRAMEBUFFER,f);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);} }
+function swap(){let t=A;A=B;B=t;t=fA;fA=fB;fB=t;}
+function solve(n){
+  gl.useProgram(SIM.p);gl.viewport(0,0,N,N);
+  const u=SIM.u;
+  gl.uniform1f(u.dt,DT);gl.uniform1f(u.Dv,Sub.Dv);gl.uniform1f(u.Da,Sub.Da);gl.uniform1f(u.Ev,Sub.Ev);gl.uniform1f(u.Ea,Sub.Ea);gl.uniform1f(u.het,Sub.het);gl.uniform1f(u.hetA,Sub.hetA);
+  bind(1,maskTex,u.M);
+  for(let i=0;i<n;i++){ bind(0,A,u.S); gl.bindFramebuffer(gl.FRAMEBUFFER,fB); quad(); swap(); }
+}
+function applyStims(list){
+  if(!list.length)return;
+  gl.useProgram(STIM.p);gl.viewport(0,0,N,N);bind(1,maskTex,STIM.u.M);
+  for(let i=0;i<list.length;i+=32){
+    const b=list.slice(i,i+32),arr=new Float32Array(96);
+    b.forEach((s,j)=>{arr[j*3]=s[0];arr[j*3+1]=s[1];arr[j*3+2]=s[2];});
+    gl.uniform3fv(STIM.u.P,arr);gl.uniform1i(STIM.u.n,b.length);
+    bind(0,A,STIM.u.S);gl.bindFramebuffer(gl.FRAMEBUFFER,fB);quad();swap();
+  }
+}
+function drawCoarse(){
+  gl.useProgram(COARSE.p);gl.viewport(0,0,W,W);bind(0,A,COARSE.u.S);bind(1,maskTex,COARSE.u.M);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,cFbo);quad();
+}
+function sampleField(){ drawCoarse(); gl.readPixels(0,0,W,W,gl.RGBA,gl.FLOAT,coarseBuf); }
+/* WHY async: a plain readPixels stops the whole GPU until the CPU has the data, which cost
+   10 ms per read on an integrated GPU. A pixel buffer plus a fence lets the GPU keep running
+   and hands the numbers over a frame later, stamped with the time they were captured. */
+const pbos=[],inflight=[];let pboIx=0,gpuLag=0;
+function initAsync(){ for(let i=0;i<5;i++){const b=gl.createBuffer();gl.bindBuffer(gl.PIXEL_PACK_BUFFER,b);gl.bufferData(gl.PIXEL_PACK_BUFFER,W*W*16,gl.STREAM_READ);pbos.push(b);} gl.bindBuffer(gl.PIXEL_PACK_BUFFER,null); }
+function sampleAsync(){
+  if(inflight.length>=pbos.length) return false;
+  drawCoarse(); const b=pbos[pboIx]; pboIx=(pboIx+1)%pbos.length;
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER,b); gl.bufferData(gl.PIXEL_PACK_BUFFER,W*W*16,gl.STREAM_READ); gl.readPixels(0,0,W,W,gl.RGBA,gl.FLOAT,0); gl.bindBuffer(gl.PIXEL_PACK_BUFFER,null);
+  inflight.push({b,s:gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0),t:H.t,at:performance.now()}); gl.flush(); return true;
+}
+function pollAsync(){
+  while(inflight.length){ const f=inflight[0],st=gl.clientWaitSync(f.s,0,0);
+    if(st===gl.TIMEOUT_EXPIRED) break;
+    inflight.shift(); gl.deleteSync(f.s); gpuLag+=(performance.now()-f.at-gpuLag)*.15;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER,f.b); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER,0,coarseBuf); gl.bindBuffer(gl.PIXEL_PACK_BUFFER,null);
+    const now=H.t; H.t=f.t; digest(); H.t=now; }
+}
+
+/* ------------------------------------------------------------------ *
+ *  7. RHYTHM ENGINE: everything that listens to the tissue
+ * ------------------------------------------------------------------ */
+let rngS=12345; const rng=()=>(rngS=(rngS*1664525+1013904223)>>>0)/4294967296;
+const H={ t:0, avHi:[], fill:1, hisBlock:0, avExtra:0, queue:[], nextSA:400, lastHis:-1e4, avBusy:0, avHigh:false, saHigh:false, pendingPT:-1,
+          lastBeat:-1e4, rr:[], F:0, FA:0, art:80, artMax:0, artMin:200, bLow:0, armed:true,
+          vMean:0, aMean:0, aMin:1, aMinT:0, lastLowV:0, chaos:0, beats:0, pOn:[], qOn:[], saEnabled:true, onBeat:null };
+const cu=(gx,gy)=>{const x=Math.min(W-1,gx/N*W|0),y=Math.min(W-1,(N-1-gy)/N*W|0);return coarseBuf[(x+y*W)*4];};
+let vIdx=[],aIdx=[];
+function buildIdx(){vIdx=[];aIdx=[];
+  for(let y=0;y<W;y++)for(let x=0;x<W;x++){const gx=Math.round((x+.5)/W*N),gy=N-1-Math.round((y+.5)/W*N);
+    if(gx<0||gy<0||gx>=N||gy>=N)continue; const r=region[gx+gy*N]; if(r===R_VEN)vIdx.push(x+y*W); else if(r===R_ATR)aIdx.push(x+y*W);} }
+function schedule(at,fn){H.queue.push({at,fn});H.queue.sort((a,b)=>a.at-b.at);}
+function fireHis(){
+  // Concealed conduction: busy ventricles invade the His bundle backwards, so a beat from above dies there.
+  if(H.t<H.hisBlock) return;            // an ectopic run has invaded the His bundle from below
+  if(H.vMean>.07&&Sub.isch>.4) return;  // only fast ischaemic activity does this; slow VT can still be captured
+  H.lastHis=H.t; H.pendingPT=H.t+P.hvDelay;
+  const base=H.t+P.hvDelay;
+  for(const j of junctions) schedule(base+j.delay,()=>pending.push([j.x,j.y,2.6]));
+}
+const pending=[];
+function fireSA(){ pending.push([SA[0],N-1-SA[1],4.5]); for(const s of atrialSites) schedule(H.t+s.delay,()=>pending.push([s.x,s.y,3])); H.pOn.push(H.t); if(H.pOn.length>20)H.pOn.shift(); }
+function senseAV(){
+  // Rising edge of voltage at any of the node's inputs: an atrial wave has arrived.
+  // The real node takes inputs from several directions, which matters once the atria are chaotic.
+  (P.avConceal?AF_IN:AV_IN).forEach((p,i)=>{ const u=cu(p[0],p[1]);
+    if(!H.avHi[i]&&u>.4){ H.avHi[i]=true;
+      const rec=H.t-H.lastHis-H.avExtra;  // recovery counts from the last beat that left the node
+      if(H.t<H.avBusy) return;
+      if(!P.avBlock&&rec>P.avERP){
+        // Decremental conduction: arrive early, conduct slowly. Mobitz I is this curve plus a fixed ERP.
+        const delay=P.avDelay+P.avDecrement*Math.exp(-Math.max(0,rec-P.avERP)/P.avTauRec);
+        H.avBusy=H.t+delay; H.avExtra=P.avConceal?rng()*340:0; schedule(H.t+delay,fireHis);
+      } else if(P.avConceal){
+        // Concealed conduction: a blocked impulse still penetrates the node and pushes back its recovery.
+        H.avExtra=Math.min(260,H.avExtra+P.avConceal*(.4+rng()*.9));
+      }
+    } else if(H.avHi[i]&&u<.2) H.avHi[i]=false; });
+  const s=cu(SA[0],SA[1]);
+  // A wave that reaches the SA node first resets it. That is overdrive suppression.
+  if(!H.saHigh&&s>.5){H.saHigh=true; if(H.nextSA-H.t>40&&H.nextSA-H.t<60000/P.hr-120)H.nextSA=H.t+60000/P.hr;}
+  else if(H.saHigh&&s<.2)H.saHigh=false;
+}
+function senseMechanics(dtMs){
+  const c=coarseBuf; let sv=0,sa=0; for(const i of vIdx)sv+=c[i*4]; for(const i of aIdx)sa+=c[i*4];
+  sv/=vIdx.length||1; sa/=aIdx.length||1; H.vMean=sv; H.aMean=sa;
+  const prev=H.F; H.F+=(sv-H.F)*Math.min(1,dtMs/70); H.FA+=(sa-H.FA)*Math.min(1,dtMs/60);
+  // Windkessel: only a fast, synchronised rise of tension ejects blood. Chaos gives no dF/dt.
+  const q=Math.max(0,(H.F-prev)/dtMs-.0012)*H.fill;
+  H.art+=(q*P.artGain*dtMs)-(H.art-14)/1700*dtMs;
+  H.art=Math.max(10,Math.min(220,H.art));
+  H.artMax=Math.max(H.artMax,H.art);H.artMin=Math.min(H.artMin,H.art);
+  // Beat detector on the mean ventricular activation
+  H.bLow+=(sv-H.bLow)*Math.min(1,dtMs/350);
+  const b=sv-H.bLow;
+  if(H.armed&&b>.08){ H.armed=false; const rr=H.t-H.lastBeat; if(rr>150&&rr<4000){H.rr.push(rr);if(H.rr.length>6)H.rr.shift();}
+    H.fill=Math.min(1.08,Math.pow(rr/830,.55))*(H.chaosA?.84:1); // less filling time, and no atrial kick in AF
+    H.lastBeat=H.t;H.beats++;H.qOn.push(H.t);if(H.qOn.length>20)H.qOn.shift();if(H.onBeat)H.onBeat();
+    H.bpShown=[H.artMax,H.artMin];H.artMax=0;H.artMin=200; }
+  else if(!H.armed&&b<.0)H.armed=true;
+  if(sa<H.aMin)H.aMin=sa;
+  if(H.t-H.aMinT>1200){H.chaosA=H.aMin>.02;H.aMin=1;H.aMinT=H.t;}
+  if(sv<.04)H.lastLowV=H.t;
+  // Escape rhythm: the safety net when nothing comes down from above
+  if(H.t-H.lastBeat>P.escapeMs&&sv<.06&&H.t-H.lastHis>P.escapeMs){fireHis();}
+}
+const ecg={}; // latest computed leads
+function advanceChunk(sense){
+  const end=H.t+CHUNK_MS;
+  while(H.queue.length&&H.queue[0].at<=end){H.queue.shift().fn();}
+  if(H.saEnabled&&H.t>=H.nextSA){fireSA();H.nextSA+=60000/P.hr;if(H.nextSA<H.t)H.nextSA=H.t+60000/P.hr;}
+  if(pending.length){applyStims(pending.splice(0));}
+  solve(CHUNK_STEPS); H.t=end;
+  if(sense){ if(window.PAUSE){sampleField();digest();} else sampleAsync(); }
+}
+let lastDigest=0;
+function digest(){ const dt=Math.max(1,Math.min(60,H.t-lastDigest)); lastDigest=H.t;
+  senseAV(); senseMechanics(dt); Object.assign(ecg,electrodes()); ecg.art=H.art; pushSample(); }
+
+/* ------------------------------------------------------------------ *
+ *  8. RECORD AND RENDER
+ * ------------------------------------------------------------------ */
+const LOG=[];let logging=false;
+function pushSample(){ if(logging)LOG.push({t:H.t,I:ecg.I,II:ecg.II,III:ecg.III,V1:ecg.V1,V5:ecg.V5,art:ecg.art,vm:H.vMean,am:H.aMean}); if(window.onSample)onSample(); }
+function render(now){
+  gl.useProgram(VIEW.p);gl.viewport(0,0,N,N);bind(0,A,VIEW.u.S);gl.bindFramebuffer(gl.FRAMEBUFFER,vFbo);quad();
+  gl.bindTexture(gl.TEXTURE_2D,vTex);gl.generateMipmap(gl.TEXTURE_2D);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,canvas.width,canvas.height);
+  gl.useProgram(DISPLAY.p);const u=DISPLAY.u;
+  bind(0,vTex,u.V);bind(1,bakeTex,u.B);bind(2,treeTex,u.R);
+  gl.uniform1f(u.t,now%1e5);gl.uniform1f(u.uF,Math.min(1,H.F*1.25));gl.uniform1f(u.uFA,Math.min(1,H.FA*1.3));
+  const pt=(H.pendingPT>0&&H.t>=H.pendingPT-20&&H.t<H.pendingPT+P.purkMax+40)?(H.t-H.pendingPT)/P.purkMax:-9;
+  gl.uniform1f(u.uPT,pt);gl.uniform1f(u.uFlash,window.flash||0);gl.uniform1f(u.uAlarm,window.alarmLevel||0);
+  quad();
+}
+function boot(){
+  buildRegions();buildMask();initGL();initAsync();buildAtrial();buildPurkinje();buildEdges();buildIdx();setSubstrate(0,false);
+}
+function advance(ms){ // deterministic stepping, used by tests
+  const n=Math.ceil(ms/CHUNK_MS);let s=false;
+  for(let i=0;i<n;i++){s=!s;advanceChunk(s);}
+}
+function size(){ const st=document.getElementById('stage').getBoundingClientRect();
+  const s=Math.floor(Math.min(st.width,st.height)),d=Math.min(window.devicePixelRatio||1,1.6);
+  canvas.style.width=canvas.style.height=s+'px';canvas.width=canvas.height=Math.floor(s*d); }
+addEventListener('resize',size);
+boot();size();
+/* ------------------------------------------------------------------ *
+ *  9. MONITOR
+ * ------------------------------------------------------------------ */
+const $=id=>document.getElementById(id);
+const mon=$('mon'),mg=mon.getContext('2d',{alpha:false});
+const SWEEP=Math.round(5000/(CHUNK_MS*2));       // samples across the screen: 5 s, like a bedside monitor
+const tr={a:new Float32Array(SWEEP).fill(NaN),b:new Float32Array(SWEEP).fill(NaN),c:new Float32Array(SWEEP).fill(NaN)};
+let head=0,leadIx=0;const LEADS=['II','I','III','aVF','V1','V3','V5'];
+window.onSample=()=>{tr.a[head]=ecg[LEADS[leadIx]];tr.b[head]=ecg.V1;tr.c[head]=ecg.art;head=(head+1)%SWEEP;
+  for(let i=1;i<14;i++){const k=(head+i)%SWEEP;tr.a[k]=tr.b[k]=tr.c[k]=NaN;}};
+function sizeMon(){const d=Math.min(devicePixelRatio||1,2);mon.width=mon.clientWidth*d;mon.height=mon.clientHeight*d;}
+function trace(buf,y0,scale,color,lw){
+  const w=mon.width,dx=w/SWEEP;mg.strokeStyle=color;mg.lineWidth=lw;mg.lineJoin='round';mg.beginPath();let pen=false;
+  for(let i=0;i<SWEEP;i++){const v=buf[i];if(v!==v){pen=false;continue;}const x=i*dx,y=y0-v*scale;if(pen)mg.lineTo(x,y);else{mg.moveTo(x,y);pen=true;}}
+  mg.stroke();
+}
+function drawMon(){
+  const w=mon.width,h=mon.height,d=w/mon.clientWidth;
+  mg.fillStyle='#060304';mg.fillRect(0,0,w,h);
+  mg.fillStyle='#ff46521a';const st=h/20;for(let y=st/2;y<h;y+=st)for(let x=st/2;x<w;x+=st)mg.fillRect(x,y,d,d);
+  const a=h*.42,b=h*.70,c=h*.97,sa=h*.26;
+  for(const [buf,y,sc,col,lw] of [[tr.a,a,sa,'#7dffb2',1.7*d],[tr.b,b,h*.07,'#58b986',1.2*d],[tr.c,c,h*.0022,'#ff5468',1.5*d]]){
+    trace(buf,y,sc,col+'33',lw*3);trace(buf,y,sc,col,lw);}
+  mg.font=`${10*d}px ui-monospace,Consolas,monospace`;
+  mg.fillStyle='#8d7f78';mg.fillText(LEADS[leadIx]+'   tap to change lead',8*d,14*d);mg.fillText('V1',8*d,h*.57);mg.fillText('ART',8*d,h*.80);
+}
+mon.addEventListener('click',()=>{leadIx=(leadIx+1)%LEADS.length;});
+
+/* ------------------------------------------------------------------ *
+ *  10. SOUND
+ * ------------------------------------------------------------------ */
+let ac=null,muted=false;
+function tone(f,dur,vol,type='sine',when=0,f2){ if(!ac||muted)return; const t=ac.currentTime+when,o=ac.createOscillator(),g=ac.createGain();
+  o.type=type;o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+dur);
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vol,t+.006);g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  o.connect(g).connect(ac.destination);o.start(t);o.stop(t+dur+.02); }
+function thud(){ if(!ac||muted)return; const n=ac.sampleRate*.35|0,b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);
+  for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,3);
+  const s=ac.createBufferSource(),g=ac.createGain();g.gain.value=.5;s.buffer=b;s.connect(g).connect(ac.destination);s.start();tone(70,.5,.8,'sine',0,28); }
+H.onBeat=()=>{ tone(960,.09,.09); tone(58,.16,.34,'sine',0,38); };
+
+/* ------------------------------------------------------------------ *
+ *  11. RHYTHM LABEL AND VITALS: read from the signal, not from the menu
+ * ------------------------------------------------------------------ */
+let label='Sinus rhythm',caseLabel=null,shockable=false,alarmOn=false,alarmT=0,charging=false;
+function median(a){const b=[...a].sort((x,y)=>x-y);return b[b.length>>1]||0;}
+function classify(){
+  const since=H.t-H.lastBeat,lowAge=H.t-H.lastLowV;
+  const m=median(H.rr),rate=m?60000/m:0;
+  const spread=H.rr.length>2?(Math.max(...H.rr)-Math.min(...H.rr))/m:0;
+  let bad=false,hr='--';
+  const noCross=lowAge>1400;                     // ventricle never returned to rest: something is circulating
+  if(noCross&&(spread>.3||since>1200)&&H.vMean>.05){label='Ventricular fibrillation';bad=true;}
+  else if(noCross&&rate>120){label='Ventricular tachycardia';bad=true;hr=Math.round(rate);}
+  else if(since>2300&&H.vMean<.03){label='Asystole';bad=true;}
+  else if(!H.rr.length&&H.vMean<.03){label='Pause';}
+  else{ hr=rate&&since<2500?Math.round(rate):'--';
+    if(H.chaosA&&lowAge<1400)label='Atrial fibrillation';
+    else label=caseLabel||(rate>100?'Sinus tachycardia':rate&&rate<55?'Sinus bradycardia':'Sinus rhythm'); }
+  shockable=bad&&label!=='Asystole';
+  const pulseless=H.art<46;
+  $('rhythm').textContent=label+(pulseless&&bad?', no pulse':'');$('rhythm').classList.toggle('bad',bad);
+  $('hr').textContent=hr;
+  $('bp').textContent=pulseless?'--/--':H.bpShown?Math.round(H.bpShown[0])+'/'+Math.round(H.bpShown[1]):'---/--';
+  $('shock').classList.toggle('on',shockable||charging);
+  $('shock').disabled=charging;
+  alarmOn=bad;
+}
+function alarm(now){ const target=alarmOn?.55+.45*Math.sin(now/170):0; window.alarmLevel=(window.alarmLevel||0)+(target-(window.alarmLevel||0))*.1;
+  if(alarmOn&&now-alarmT>900){alarmT=now;if(label==='Asystole')tone(620,.8,.05,'sine');else{tone(880,.16,.055,'square');tone(660,.16,.055,'square',.2);}} }
+
+/* ------------------------------------------------------------------ *
+ *  12. CASES
+ * ------------------------------------------------------------------ */
+let runId=0,ischTarget=0;
+const wait=ms=>new Promise(r=>schedule(H.t+ms,r));
+const nextBeat=()=>new Promise(r=>{const n=H.beats;const f=()=>H.beats>n?r():schedule(H.t+CHUNK_MS*2.5,f);f();});
+const note=t=>{$('note').innerHTML=t;};
+function setIsch(v){ischTarget=v;$('isch').value=v*100;}
+function restore(){ H.saEnabled=true; if(H.nextSA<H.t)H.nextSA=H.t+300; Object.assign(P,{hr:72,avDelay:62,avERP:270,avDecrement:0,avTauRec:300,avBlock:false,avConceal:0}); H.avExtra=0; caseLabel=null; setIsch(0); setSubstrate(0,false); }
+function arcA(c,ra,t0,t1,r){ for(let i=0;i<=10;i++){const t=t0+(t1-t0)*i/10;stimAt(c[0]+ra*Math.cos(t),c[1]+ra*Math.sin(t),r);} }
+// WHY a 16 ms pulse: well-coupled tissue drains a small, brief stimulus (the liminal length). A real focus must beat that.
+function ectopic(gx,gy){ for(let i=0;i<5;i++) schedule(H.t+i*CHUNK_MS,()=>pending.push([gx,gy,15]));
+  // A ventricular focus enters the Purkinje network and runs backwards through it. Slower than normal, so the QRS is wide.
+  if(region[(gx|0)+((N-1-gy)|0)*N]===R_VEN&&Sub.isch<.4)
+    for(const j of junctions){const d=Math.hypot(j.x-gx,j.y-gy); schedule(H.t+55+d*.62,()=>pending.push([j.x,j.y,2.6]));} }
+function stimAt(x,y,r){ const q=toGrid(x,y); pending.push([q[0],N-1-q[1],r]); }
+function stimLine(x0,y0,x1,y1,r){ for(let i=0;i<=18;i++){const a=i/18;stimAt(x0+(x1-x0)*a,y0+(y1-y0)*a,r);} } // WHY a line: a strip beside a recovering wave can only spread one way
+const CASES=[
+ {id:'sinus',label:'Sinus',run:async()=>{ note('<b>Normal sinus rhythm.</b> SA node fires, atria spread (P). The AV node holds the signal back. Purkinje fires the walls together (QRS). The epicardium recovers first, so T stays upright. Tap the muscle to interfere.'); }},
+ {id:'pvc',label:'PVC',run:async(id)=>{ note('<b>Premature ventricular beat.</b> A focus in the RV fires early and spreads the slow way, so the QRS is wide. The next sinus beat finds the ventricles refractory and is lost. Short interval plus pause add up to two normal beats: a full compensatory pause.');
+   for(;;){ await nextBeat(); await nextBeat(); await nextBeat(); if(id!==runId)return; await wait(480); if(id!==runId)return; {const q=toGrid(-.335,.2);ectopic(q[0],N-1-q[1]);} } }},
+ {id:'af',label:'AF',run:async(id)=>{ note('<b>Burst pacing.</b> Remodelled atria recover fast and unevenly. A rapid catheter burst, the way an EP lab provokes AF, pushes them past the point where waves can stay organised.');
+   setSubstrate(0,true); Object.assign(P,{avDecrement:110,avTauRec:260,avERP:300,avConceal:55}); H.saEnabled=false;
+   for(let i=0;i<16;i++){ stimAt(i%2?.27:-.34,i%2?-.2:-.12,6); await wait(130); if(id!==runId)return; }
+   await wait(1500); if(id!==runId)return;
+   note('<b>Atrial fibrillation.</b> Wavelets wander the atria and the SA node is overdriven. No P waves. The AV node lets through what it can, which is why the pulse is irregularly irregular.'); }},
+ {id:'mobitz',label:'Mobitz I',run:async()=>{ caseLabel='Mobitz I (Wenckebach)'; Object.assign(P,{hr:80,avDelay:140,avERP:430,avDecrement:260,avTauRec:200});
+   note('<b>Mobitz I.</b> The AV node tires. Each impulse arrives earlier in its recovery, so PR grows, until one P wave finds it refractory and no QRS follows. The dropped beat lets it recover and the cycle restarts.'); }},
+ {id:'chb',label:'Complete block',run:async()=>{ caseLabel='Complete heart block'; P.avBlock=true; P.hr=78;
+   note('<b>Complete heart block.</b> Nothing crosses the AV node. The atria beat at 78 while a slow junctional escape drives the ventricles on its own. P waves march through with no relationship to the QRS.'); }},
+ {id:'vf',label:'R on T → VF',run:async(id)=>{ note('<b>Ischaemia.</b> Starved muscle conducts slowly and recovers early, so the wavelength shrinks. A healthy heart has no room for a wave to circle. This one is about to.');
+   setIsch(1); await wait(2600); if(id!==runId)return;
+   for(let i=0;i<5;i++){
+     note(i?'<b>That one died out.</b> Not every R on T starts VF. It depends on the instant it lands. Trying again.':'<b>R on T.</b> A premature beat lands on the T wave, when some cells have recovered and their neighbours have not. It can only travel one way.');
+     await nextBeat(); if(id!==runId)return; await wait(P.vfS1); if(id!==runId)return;
+     H.hisBlock=H.t+P.vfS2+1400; stimLine(.17,.06,.36,.04,4); await wait(P.vfS2); if(id!==runId)return; stimLine(.285,.05,.30,.42,4);
+     await wait(2200); if(id!==runId)return;
+     if(H.t-H.lastLowV>1400){ note('<b>Ventricular fibrillation.</b> The muscle is electrically frantic and mechanically useless: watch ART collapse. Press SHOCK.'); return; }
+   }
+   note('<b>No sustained VF this time.</b> The waves kept dying. Fibrillation needs the right substrate and the right instant, which is why most ectopic beats are harmless.'); }},
+];
+async function seed(list,id){ // Programmed stimulation: the same S1-S2 protocol an EP lab uses.
+  for(const [w,x,y,r] of list){ await wait(w); if(id!==runId)return; stimAt(x,y,r); }
+}
+P.s2Atr=[[150,-.3,-.16,5],[110,-.1,-.26,5],[105,.24,-.2,5],[100,-.2,-.05,5]];
+P.vfS1=330;P.vfS2=500;
+const nav=$('cases');
+CASES.sort((a,b)=>['sinus','vf','af','pvc','mobitz','chb'].indexOf(a.id)-['sinus','vf','af','pvc','mobitz','chb'].indexOf(b.id));
+CASES.forEach(c=>{const b=document.createElement('button');b.className='chip';b.textContent=c.label;b.dataset.id=c.id;b.onclick=()=>startCase(c.id);nav.appendChild(b);});
+function startCase(id){ const c=CASES.find(x=>x.id===id); runId++;
+  if(H.t-H.lastLowV>1400||H.chaosA){clearState();H.queue.length=0;pending.length=0;H.lastLowV=H.t;H.chaosA=false;H.lastBeat=H.t;H.rr.length=0;}
+  [...nav.children].forEach(b=>b.classList.toggle('on',b.dataset.id===id)); restore(); c.run(runId); }
+function deliverShock(){
+  gl.useProgram(SHOCK.p);gl.viewport(0,0,N,N);bind(0,A,SHOCK.u.S);bind(1,maskTex,SHOCK.u.M);gl.bindFramebuffer(gl.FRAMEBUFFER,fB);quad();swap();
+  H.queue.length=0;pending.length=0;H.hisBlock=0;H.nextSA=H.t+1700;H.lastBeat=H.t;H.lastHis=H.t;H.rr.length=0;H.chaosA=false;H.lastLowV=H.t;
+  restore();setSubstrate(0,false);
+  window.flash=1;thud();navigator.vibrate&&navigator.vibrate(180);
+  for(let i=0;i<9;i++){const k=(head+i)%SWEEP;tr.a[k]=(i%2?1:-1)*(9-i)*.42;tr.b[k]=tr.a[k]*.6;}
+  [...nav.children].forEach(b=>b.classList.remove('on'));
+  note('<b>Shock delivered.</b> Every cell depolarised at once, so no wave has anywhere left to go. For a second there is nothing. Then the SA node, the only clock left, tries again.');
+}
+function shock(){
+  if(charging)return; charging=true; runId++; classify(); tone(300,1.1,.07,'sawtooth',0,2600); $('shock').textContent='CHARGING';
+  setTimeout(()=>{charging=false;$('shock').textContent='SHOCK';deliverShock();classify();},1150);
+}
+$('shock').onclick=shock;
+
+/* ------------------------------------------------------------------ *
+ *  13. TOUCH: tap fires an ectopic beat, brush lays down scar
+ * ------------------------------------------------------------------ */
+let scarMode=false,painting=false,lastPaint=[0,0];
+function paintScar(gx,gy){ const r=7;
+  for(let y=-r;y<=r;y++)for(let x=-r;x<=r;x++){ if(x*x+y*y>r*r)continue; const X=gx+x|0,Y=gy+y|0; if(X<3||Y<3||X>N-4||Y>N-4)continue;
+    const k=X+Y*N; if(region[k]!==R_VEN&&region[k]!==R_ATR)continue; region[k]=R_SCAR;
+    const o=(X+(N-1-Y)*N)*4; mask[o]=0;mask[o+3]=0;anat[o]=0;anat[o+1]=0;anat[o+2]=0;anat[o+3]=255; }
+  gl.bindTexture(gl.TEXTURE_2D,maskTex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,N,N,gl.RGBA,gl.UNSIGNED_BYTE,mask);
+  gl.bindTexture(gl.TEXTURE_2D,anatTex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,N,N,gl.RGBA,gl.UNSIGNED_BYTE,anat);gl.generateMipmap(gl.TEXTURE_2D);
+  bake();
+}
+function toCell(e){const b=canvas.getBoundingClientRect();return [(e.clientX-b.left)/b.width*N,(e.clientY-b.top)/b.height*N];}
+canvas.addEventListener('pointerdown',e=>{ const [x,y]=toCell(e);
+  if(scarMode){painting=true;lastPaint=[x,y];paintScar(x,y);canvas.setPointerCapture(e.pointerId);return;}
+  const r=region[(x|0)+(y|0)*N]; if(r!==R_VEN&&r!==R_ATR)return;
+  ectopic(x,N-1-y); navigator.vibrate&&navigator.vibrate(8); tone(180,.05,.08,'triangle'); });
+canvas.addEventListener('pointermove',e=>{ if(!painting)return; const[x,y]=toCell(e),[a,b]=lastPaint,n=Math.ceil(Math.hypot(x-a,y-b)/4);
+  for(let i=1;i<=n;i++)paintScar(a+(x-a)*i/n,b+(y-b)*i/n); lastPaint=[x,y]; });   // WHY: fast drags report few points, so fill the gaps
+const endPaint=()=>{if(painting){painting=false;buildEdges();buildIdx();}};
+canvas.addEventListener('pointerup',endPaint);canvas.addEventListener('pointercancel',endPaint);
+$('scar').onclick=()=>{scarMode=!scarMode;$('scar').classList.toggle('on',scarMode);$('scar').textContent=scarMode?'Scar on':'Scar brush';
+  if(scarMode)note('<b>Scar brush.</b> Drag across the ventricle to draw dead tissue. A wave has to go around it, and a scar with a narrow channel is the classic setup for VT after an MI. Turn the brush off, then tap to fire.');};
+$('isch').oninput=e=>{ischTarget=e.target.value/100;};
+let slowOn=false;
+$('slow').onclick=()=>{slowOn=!slowOn;$('slow').classList.toggle('on',slowOn);$('slow').setAttribute('aria-pressed',slowOn);$('slow').textContent=slowOn?'Slow ¼':'Slow';};
+$('snd').onclick=()=>{muted=!muted;$('snd').classList.toggle('on',!muted);$('snd').setAttribute('aria-pressed',!muted);};
+$('how').onclick=()=>$('sheet').classList.add('on');$('close').onclick=()=>$('sheet').classList.remove('on');
+
+/* ------------------------------------------------------------------ *
+ *  14. MAIN LOOP
+ *  WHY the budget: a slow phone should run the heart in slow motion,
+ *  never drop stimuli. Simulated time only advances when work is done.
+ * ------------------------------------------------------------------ */
+let last=performance.now(),acc=0,budget=4,running=false,flip=false,tick=0;
+function stepIsch(){ const cur=Sub.isch; if(Math.abs(ischTarget-cur)>.002) setSubstrate(cur+(ischTarget-cur)*.03,Sub.Da<P.Da); }
+function loop(now){
+  const dt=Math.min(60,now-last);last=now;
+  if(running&&!window.PAUSE){
+    stepIsch();
+    acc+=dt*(slowOn?.25:1);
+    pollAsync();
+    // Backpressure: the fence tells us how far behind the GPU is, so we never queue more than it can drain.
+    if(gpuLag>34&&budget>1)budget-=.25;else if(gpuLag<20&&budget<6)budget+=.05;
+    let n=0;
+    if(inflight.length<3) while(acc>=CHUNK_MS&&n<budget){flip=!flip;advanceChunk(flip);acc-=CHUNK_MS;n++;}
+    if(acc>CHUNK_MS*4)acc=CHUNK_MS*4;
+    if(++tick%12===0)classify();
+    alarm(now);
+    window.flash=(window.flash||0)*.82;
+    render(now);drawMon();
+  }
+  requestAnimationFrame(loop);
+}
+function begin(){
+  try{ac=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}
+  $('intro').classList.add('off');
+  H.nextSA=H.t+900;H.lastBeat=H.t+300;H.lastHis=H.t+300;running=true;startCase('sinus');
+}
+$('begin').onclick=begin;
+addEventListener('resize',sizeMon);sizeMon();
+const cells=region.reduce((a,r)=>a+(r===R_VEN||r===R_ATR?1:0),0);
+document.querySelector('#intro p').textContent=`This heart is not an animation. Two thousand times a second, your graphics chip solves the voltage of ${(Math.round(cells/1000)*1000).toLocaleString('en')} patches of muscle.`;
+window.__r={H,P,Sub,LOG,advance,render,setSubstrate,ecg,FF,N,junctions,log:v=>{logging=v;},region,clearState,pending,toGrid,cells,startCase,shock,deliverShock,stimLine,arcA,ectopic,cu,AV:()=>AV_IN,classify,drawMon,stimAt,setIsch,begin,stepIsch,get label(){return label;},buildAll:()=>{buildMask();gl.bindTexture(gl.TEXTURE_2D,maskTex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,N,N,gl.RGBA,gl.UNSIGNED_BYTE,mask);}};
+if(Q.has('test')){$('intro').style.display='none';}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
